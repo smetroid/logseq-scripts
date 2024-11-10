@@ -40,4 +40,5 @@ TAGS_STRING="${TAGS[*]}"
   echo "  $CMD"
   echo '  ```'
   echo "  $TAGS_STRING"
+  echo ""
 } >> "$JOURNAL_FILE"

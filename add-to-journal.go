@@ -47,9 +47,6 @@ func main() {
 		defer file.Close()
 
 		writer := bufio.NewWriter(file)
-		fmt.Fprintln(writer, "---")
-		fmt.Fprintf(writer, "title:: %s\n", today)
-		fmt.Fprintln(writer, "---")
 		fmt.Fprintln(writer, "## Entry from Go Script")
 		writer.Flush()
 	}

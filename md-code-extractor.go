@@ -8,6 +8,7 @@ import (
 	"os/user"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 	"sync"
 )
@@ -25,26 +26,72 @@ func expandPath(path string) (string, error) {
 	return path, nil
 }
 
-// extractMdBlocks extracts fenced code blocks from markdown text.
-func extractMdBlocks(text []byte) []string {
+// Helper function to find the index of the line corresponding to a character offset
+func findLineIndex(lines []string, offset int) int {
+	currentOffset := 0
+	for i, line := range lines {
+		currentOffset += len(line) + 1 // Add 1 for the newline character
+		if currentOffset > offset {
+			return i
+		}
+	}
+	return -1
+}
+
+// extractMdBlocks extracts fenced code blocks and their associated tags from markdown text.
+func extractMdBlocks(text []byte) []map[string]string {
 	// Define the regular expression pattern for fenced code blocks
-	pattern := "```(?:\\w+\\s+)?(.*?)```"
+	codeBlockPattern := regexp.MustCompile("(?s)```(?:\\w+\\s+)?(.*?)```")
 
-	// Compile the regular expression with the `(?s)` flag to allow . to match newlines
-	re := regexp.MustCompile("(?s)" + pattern)
+	// Find all matches of code blocks in the text
+	matches := codeBlockPattern.FindAllStringSubmatchIndex(string(text), -1)
 
-	// Find all matches in the text
-	matches := re.FindAllStringSubmatch(string(text), -1)
+	var results []map[string]string
+	lines := strings.Split(string(text), "\n") // Split the text into lines for tag detection
 
-	// Extract and trim the matched blocks
-	var blocks []string
 	for _, match := range matches {
-		if len(match) > 1 {
-			blocks = append(blocks, strings.TrimSpace(match[1]))
+		if len(match) >= 4 {
+			// Extract the code block
+			codeBlock := strings.TrimSpace(string(text[match[2]:match[3]]))
+
+			// Locate the potential tag line
+			tags := ""
+			endOfBlockIndex := match[1] // End of the matched code block
+			tagStartLine := findLineIndex(lines, endOfBlockIndex)
+
+			if tagStartLine >= 0 && tagStartLine+1 < len(lines) {
+				possibleTagLine := strings.TrimSpace(lines[tagStartLine+1])
+				if strings.HasPrefix(possibleTagLine, "#") { // Ensure it's a valid tag line
+					tags = possibleTagLine
+				}
+			}
+
+			// Add the code block and tag to the results
+			results = append(results, map[string]string{
+				"code": codeBlock,
+				"tags": tags,
+			})
 		}
 	}
 
-	return blocks
+	return results
+}
+
+// Function to filter commands based on a tag
+func filterCommandsByTag(resultSlice []map[string]string, tag string) map[string]string {
+	// Create a map to hold the filtered results
+	filteredResults := make(map[string]string)
+
+	// Iterate through the slice and check if the "tags" contain the specified tag
+	for _, result := range resultSlice {
+		// Check if the "tags" contain the provided tag (case-sensitive)
+		if strings.Contains(result["tags"], tag) {
+			// Add the command to the filtered map
+			filteredResults[result["command"]] = result["tags"]
+		}
+	}
+
+	return filteredResults
 }
 
 func main() {
@@ -65,7 +112,7 @@ func main() {
 	}
 
 	// Channel to collect results
-	results := make(chan string, len(files))
+	results := make(chan map[string]string, len(files))
 
 	// WaitGroup to synchronize Go routines
 	var wg sync.WaitGroup
@@ -88,7 +135,6 @@ func main() {
 
 			// Collect results
 			for _, match := range matches {
-				//fmt.Println(match)
 				results <- match
 			}
 		}(file)
@@ -100,15 +146,29 @@ func main() {
 		close(results)
 	}()
 
+	var slice []map[string]string
+	for cmd := range results {
+		slice = append(slice, cmd)
+	}
+
+	// Sort the results by the "command" key (alphabetical order)
+	sort.Slice(slice, func(i, j int) bool {
+		return slice[i]["command"] < slice[j]["command"]
+	})
+
 	// Read all data from the channel into a slice
 	stringsMap := []map[string]string{}
-	for item := range results {
-		itemMap := map[string]string{"name": item, "type": "cmd"}
+	for _, item := range slice {
+		itemMap := map[string]string{"command": item["code"], "tags": item["tags"]}
 		stringsMap = append(stringsMap, itemMap)
 	}
 
+	// Call the function with tag "docker"
+	tag := "cmd"
+	filteredCommands := filterCommandsByTag(stringsMap, tag)
+
 	// Convert list to JSON
-	jsonData, err := json.MarshalIndent(stringsMap, "", "  ")
+	jsonData, err := json.MarshalIndent(filteredCommands, "", "  ")
 	if err != nil {
 		log.Fatalf("Error converting to JSON: %v", err)
 	}
